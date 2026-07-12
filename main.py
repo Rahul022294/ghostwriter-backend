@@ -1,7 +1,7 @@
 import os
 import json
 import stripe
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
@@ -125,7 +125,7 @@ async def stripe_webhook(request: Request):
         except Exception as e:
             print(f"⚠️ Webhook signature verification failed: {e}")
 
-    # 2. Fallback to parsing raw body payload if verification is skipped during dev testing
+    # 2. Fallback to parsing raw body payload if verification was skipped
     if not event:
         try:
             event = json.loads(payload.decode("utf-8"))
@@ -134,13 +134,16 @@ async def stripe_webhook(request: Request):
             raise HTTPException(status_code=400, detail="Invalid payload")
 
     # 3. Handle successful checkout session
-    event_type = event.get("type") if isinstance(event, dict) else event.type
+    event_type = event["type"] if isinstance(event, dict) else event.type
     
     if event_type == "checkout.session.completed":
         data_object = event["data"]["object"] if isinstance(event, dict) else event.data.object
         
-        # Extract user_id passed in client_reference_id
-        user_id = data_object.get("client_reference_id")
+        # Safely extract client_reference_id whether data_object is a dict or a StripeObject
+        if isinstance(data_object, dict):
+            user_id = data_object.get("client_reference_id")
+        else:
+            user_id = getattr(data_object, "client_reference_id", None)
         
         if user_id and supabase:
             supabase.table("users").update({"is_pro": True}).eq("user_id", user_id).execute()
