@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
+from supabase import create_client, Client
 
 app = FastAPI()
 
@@ -13,14 +14,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize AI Client
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
+# Initialize Supabase Client
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+
 class JobPayload(BaseModel):
+    user_id: str
     job_text: str
     user_skills: str = "Experienced Python developer skilled in FastAPI, web scraping, and AI integrations."
 
+FREE_LIMIT = 5
+STRIPE_PAYMENT_LINK = "https://buy.stripe.com/test_placeholder" # We will replace this with your real Stripe link later
+
 @app.post("/draft")
 async def create_draft(payload: JobPayload):
+    user_id = payload.user_id
+
+    # 1. Check or register user in Supabase
+    if supabase:
+        response = supabase.table("users").select("*").eq("user_id", user_id).execute()
+        user_data = response.data
+
+        if not user_data:
+            # New user: insert into database
+            supabase.table("users").insert({"user_id": user_id, "generations_count": 0, "is_pro": False}).execute()
+            count = 0
+            is_pro = False
+        else:
+            count = user_data[0]["generations_count"]
+            is_pro = user_data[0]["is_pro"]
+
+        # 2. Enforce free usage limit
+        if not is_pro and count >= FREE_LIMIT:
+            return {
+                "proposal": (
+                    f"⚠️ Free Trial Limit Reached ({FREE_LIMIT}/{FREE_LIMIT} proposals used).\n\n"
+                    f"To unlock unlimited AI proposal generation, upgrade to Pro for $5/month:\n\n"
+                    f"👉 Upgrade Here: {STRIPE_PAYMENT_LINK}"
+                )
+            }
+
+    # 3. Generate proposal via Groq LLaMA 3.3
     system_prompt = (
         "You are an expert freelance proposal writer. Your task is to output ONLY the proposal text itself. "
         "DO NOT include conversational introductory phrases like 'Here is a proposal', 'Sure!', or meta explanations. "
@@ -48,13 +86,17 @@ async def create_draft(payload: JobPayload):
         )
         
         proposal = chat_completion.choices[0].message.content.strip()
+
+        # 4. Increment usage count in Supabase after successful generation
+        if supabase:
+            supabase.table("users").update({"generations_count": count + 1}).eq("user_id", user_id).execute()
+
         return {"proposal": proposal}
         
     except Exception as e:
         print("Groq API Error:", e)
         return {"proposal": f"Error calling Groq API: {str(e)}"}
 
-# Crucial for Render deployment: Binds to Render's dynamic PORT environment variable
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
