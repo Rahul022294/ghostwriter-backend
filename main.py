@@ -1,5 +1,6 @@
 import os
-from fastapi import FastAPI
+import stripe
+from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
@@ -17,10 +18,18 @@ app.add_middleware(
 # Initialize AI Client
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-# Initialize Supabase Client
+# Initialize Supabase
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+
+# Initialize Stripe
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
+STRIPE_PAYMENT_LINK = os.environ.get("STRIPE_PAYMENT_LINK", "https://buy.stripe.com/test_placeholder")
+
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
 
 class JobPayload(BaseModel):
     user_id: str
@@ -28,7 +37,6 @@ class JobPayload(BaseModel):
     user_skills: str = "Experienced Python developer skilled in FastAPI, web scraping, and AI integrations."
 
 FREE_LIMIT = 5
-STRIPE_PAYMENT_LINK = "https://buy.stripe.com/test_placeholder" # We will replace this with your real Stripe link later
 
 @app.post("/draft")
 async def create_draft(payload: JobPayload):
@@ -40,7 +48,6 @@ async def create_draft(payload: JobPayload):
         user_data = response.data
 
         if not user_data:
-            # New user: insert into database
             supabase.table("users").insert({"user_id": user_id, "generations_count": 0, "is_pro": False}).execute()
             count = 0
             is_pro = False
@@ -50,11 +57,12 @@ async def create_draft(payload: JobPayload):
 
         # 2. Enforce free usage limit
         if not is_pro and count >= FREE_LIMIT:
+            user_stripe_url = f"{STRIPE_PAYMENT_LINK}?client_reference_id={user_id}"
             return {
                 "proposal": (
                     f"⚠️ Free Trial Limit Reached ({FREE_LIMIT}/{FREE_LIMIT} proposals used).\n\n"
                     f"To unlock unlimited AI proposal generation, upgrade to Pro for $5/month:\n\n"
-                    f"👉 Upgrade Here: {STRIPE_PAYMENT_LINK}"
+                    f"👉 Upgrade Here: {user_stripe_url}"
                 )
             }
 
@@ -96,6 +104,36 @@ async def create_draft(payload: JobPayload):
     except Exception as e:
         print("Groq API Error:", e)
         return {"proposal": f"Error calling Groq API: {str(e)}"}
+
+# ==========================================
+# STRIPE WEBHOOK: Automatic Pro Upgrade
+# ==========================================
+@app.post("/stripe-webhook")
+async def stripe_webhook(request: Request, stripe_signature: str = Header(None)):
+    payload = await request.body()
+    
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, stripe_signature, STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.error.SignatureVerificationError as e:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    # Handle successful payment session
+    if event['type'] == 'checkout.session.completed':
+        session = event['data']['object']
+        
+        # Extract user_id passed in client_reference_id
+        user_id = session.get('client_reference_id')
+        
+        if user_id and supabase:
+            # Upgrade user to Pro in Supabase
+            supabase.table("users").update({"is_pro": True}).eq("user_id", user_id).execute()
+            print(f"✅ User {user_id} upgraded to Pro!")
+
+    return {"status": "success"}
 
 if __name__ == "__main__":
     import uvicorn
