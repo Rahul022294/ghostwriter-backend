@@ -54,9 +54,14 @@ async def get_current_user(authorization: str = Header(None)):
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Auth failed: {str(e)}")
 
+# In main.py
 class JobPayload(BaseModel):
     job_text: str
     user_skills: str = "Experienced Python developer skilled in FastAPI, web scraping, and AI integrations."
+
+# If it still fails, change the route to accept extra fields:
+class Config:
+    extra = "ignore"
 
 @app.post("/draft")
 async def create_draft(payload: JobPayload, current_user = Depends(get_current_user)):
