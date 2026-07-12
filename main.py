@@ -21,6 +21,8 @@ client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set!")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
@@ -43,14 +45,14 @@ async def get_current_user(authorization: str = Header(None)):
     token = authorization.split(" ")[1]
     
     try:
-        # Verify JWT token with Supabase Auth
-        user_response = supabase.auth.get_user(token)
+        # Pass the token explicitly as the jwt argument
+        user_response = supabase.auth.get_user(jwt=token)
         if not user_response or not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid token or expired session")
+            raise HTTPException(status_code=401, detail="Invalid token")
         
         return user_response.user
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Auth failed: {str(e)}")
 
 class JobPayload(BaseModel):
     job_text: str
