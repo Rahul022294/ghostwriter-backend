@@ -38,6 +38,7 @@ class JobPayload(BaseModel):
     user_skills: str = "Experienced Python developer skilled in FastAPI, web scraping, and AI integrations."
 
 FREE_LIMIT = 5
+PRO_LIMIT = 200  # Hard daily/monthly cap for Pro users to prevent automation abuse
 
 @app.post("/draft")
 async def create_draft(payload: JobPayload):
@@ -56,14 +57,23 @@ async def create_draft(payload: JobPayload):
             count = user_data[0]["generations_count"]
             is_pro = user_data[0]["is_pro"]
 
-        # 2. Enforce free usage limit
+        # 2. Enforce limits based on account tier
         if not is_pro and count >= FREE_LIMIT:
             user_stripe_url = f"{STRIPE_PAYMENT_LINK}?client_reference_id={user_id}"
             return {
                 "proposal": (
                     f"⚠️ Free Trial Limit Reached ({FREE_LIMIT}/{FREE_LIMIT} proposals used).\n\n"
-                    f"To unlock unlimited AI proposal generation, upgrade to Pro for $5/month:\n\n"
+                    f"To unlock Pro access, upgrade for $5/month:\n\n"
                     f"👉 Upgrade Here: {user_stripe_url}"
+                )
+            }
+
+        if is_pro and count >= PRO_LIMIT:
+            return {
+                "proposal": (
+                    f"⚠️ Fair Use Safety Limit Reached ({PRO_LIMIT}/{PRO_LIMIT} generations used).\n\n"
+                    f"To prevent automated abuse, generations are capped per account. "
+                    f"Please contact support if you need a higher custom limit."
                 )
             }
 
