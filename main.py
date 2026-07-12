@@ -11,9 +11,10 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["https://www.upwork.com"], # Specifically allow Upwork
+    allow_credentials=True,
+    allow_methods=["*"], # Allow all HTTP methods (POST, GET, etc.)
+    allow_headers=["*"], # Allow all headers (including Authorization)
 )
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
